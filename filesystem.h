@@ -35,4 +35,16 @@ int file_exists(const char *path);
  */
 int absolute_path(const char *path, char *buffer, size_t size);
 
+/**
+ * Copies the contents of a directory recursively, preserving
+ * subdirectories and their files.
+ *
+ * @param src Path of the source directory.
+ * @param dst Path of the destination directory (must already exist).
+ *
+ * @return 0 on success.
+ * @return 1 on error.
+ */
+int copy_directory(const char *src, const char *dst);
+
 #endif // FILESYSTEM__H

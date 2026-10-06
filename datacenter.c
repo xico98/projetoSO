@@ -5,6 +5,8 @@
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 void datacenter_init(DataCenter *dc) {
   dc->servers = NULL;
@@ -120,6 +122,14 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id) {
 
   Reservation *res = find_pending_reservation(dc, reservation_id);
   if (!res) return 1;
+
+  if (mkdir("/tmp/CloudIST", 0755) == -1 && errno != EEXIST){
+  fprintf(stderr, "Failed to create /tmp/CloudIST.\n");
+  return 1;
+  }
+  
+
+  
 
   if (spawn_all_vms(res) != 0) return 1;
 
