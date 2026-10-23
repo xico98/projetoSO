@@ -122,8 +122,8 @@ int main(int argc, char **argv){
 	DataCenter dc;
 	datacenter_init(&dc);
 
-	if (argc != 6) {
-    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <dir>\n", argv[0]);
+	if (argc != 7 && argc != 8) {
+    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <selected_cpus> <dir>\n", argv[0]);
     return 1;
   }
 
@@ -131,12 +131,14 @@ int main(int argc, char **argv){
 	size_t ram;
 	size_t disk;
 	double cpu;
-	const char *input_dir = argv[5];
+	size_t selected_cpus;
+	const char *input_dir = argv[6];
 
 	if (parse_size_t_arg(argv[1], &servers) != 0 ||
 			parse_size_t_arg(argv[2], &ram) != 0 ||
 			parse_size_t_arg(argv[3], &disk) != 0 ||
-			parse_double_arg(argv[4], &cpu) != 0) {
+			parse_double_arg(argv[4], &cpu) != 0 ||
+			parse_size_t_arg(argv[5], &selected_cpus) != 0){
 		fprintf(stderr, "Invalid command line arguments.\n");
 		return 1;
 	}

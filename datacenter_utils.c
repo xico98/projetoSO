@@ -239,21 +239,43 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 }
 
 void spawn_vm_child(VM *vm) {
-	(void)vm; // To avoid warning.
 
-	// TODO: Limit RAM, DISK and use exec with cpulimit.
+    pid_t pid;
 
-	fprintf(stderr, "VM execution not implemented in base version.\n");
+	switch (pid = fork()) {
+		case -1:
+			perror("fork");
+			vm->state = VM_STATE_TERMINATED;
+			return;
+		case 0: 
+			// Child process
+			if (chdir(vm->type->input_folder) != 0) {
+            	perror("chdir");
+            	_exit(1);
+        	}
+			char *argv[] = {
+				vm->type->exec_path,
+				NULL
+			};
+
+			execv(vm->type->exec_path, argv);
+			perror("execv");
+			_exit(127);
+		}
+
+    // Parent process
+    vm->pid = pid;
+    vm->state = VM_STATE_RUNNING;
 }
 
 int spawn_all_vms(Reservation *res) {
 	for (size_t i = 0; i < res->num_vms; i++) {
 		VM *vm = res->vms[i];
-
-		// TODO: Implement fork code. Set VM PID and update VM state to running.
-
 		spawn_vm_child(vm);
-
+		if (vm->state != VM_STATE_RUNNING) {
+            fprintf(stderr, "Failed to start VM %s\n", vm->id);
+            return 1;
+		}
 	}
 
 	return 0;
@@ -261,9 +283,24 @@ int spawn_all_vms(Reservation *res) {
 
 void wait_for_all_vms(Reservation *res) {
 	for (size_t i = 0; i < res->num_vms; i++) {
-		// TODO: IMPLEMENT WAITING FOR VM
+		VM *vm = res->vms[i];
 
-		res->vms[i]->state = VM_STATE_TERMINATED;
+		int status = 0;
+        if (waitpid(vm->pid, &status, 0) == -1) {
+            perror("waitpid");
+            vm->state = VM_STATE_TERMINATED;
+            continue;
+        }
+		if (WIFEXITED(status)) {
+            // child exited normally
+            vm->state = VM_STATE_TERMINATED;
+        } else if (WIFSIGNALED(status)) {
+            // child was terminated by a signal
+            vm->state = VM_STATE_TERMINATED;
+        } else {
+            // unexpected state
+            vm->state = VM_STATE_TERMINATED;
+        }
 	}
 }
 
