@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-void datacenter_init(DataCenter *dc) {
+int datacenter_init(DataCenter *dc) {
   dc->servers = NULL;
   dc->num_servers = 0;
 
@@ -20,6 +20,13 @@ void datacenter_init(DataCenter *dc) {
   dc->configured = 0;
 
   dc->total_cpu = 0.0;
+
+  if (pthread_mutex_init(&dc->lock, NULL) != 0){
+    fprintf(stderr, "Failed to initialize Data Center lock.\n");
+    return 1;
+  }
+
+  return 0;
 }
 
 void datacenter_destroy(DataCenter *dc) {
@@ -36,6 +43,7 @@ void datacenter_destroy(DataCenter *dc) {
     }
   }
   free(dc->servers);
+  pthread_mutex_destroy(&dc->lock);
 }
 
 int datacenter_configure(DataCenter *dc, size_t num_servers, Resources *resources){
@@ -72,7 +80,7 @@ int datacenter_configure(DataCenter *dc, size_t num_servers, Resources *resource
   return 0;
 }
 
-int datacenter_define_VM(DataCenter *dc, VMType *type){
+static int datacenter_define_VM_unlocked(DataCenter *dc, VMType *type){
   if (!dc->configured) {
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
@@ -103,7 +111,15 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
   return 0;
 }
 
-int datacenter_reserve(DataCenter *dc, Reservation *reservation) {
+int datacenter_define_VM(DataCenter *dc, VMType *type){
+  pthread_mutex_lock(&dc->lock);
+  int ret = datacenter_define_VM_unlocked(dc, type);
+  pthread_mutex_unlock(&dc->lock);
+  return ret;
+}
+
+// Caller must hold dc->lock.
+static int datacenter_reserve_unlocked(DataCenter *dc, Reservation *reservation){
   if (!dc->configured) {
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
@@ -127,7 +143,15 @@ int datacenter_reserve(DataCenter *dc, Reservation *reservation) {
   return 0;
 }
 
-int datacenter_execute(DataCenter *dc, const char *reservation_id) {
+int datacenter_reserve(DataCenter *dc, Reservation *reservation) {
+  pthread_mutex_lock(&dc->lock);
+  int ret = datacenter_reserve_unlocked(dc, reservation);
+  pthread_mutex_unlock(&dc->lock);
+  return ret;
+}
+
+
+static int datacenter_execute_unlocked(DataCenter *dc, const char *reservation_id) {
   if(!dc->configured){
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
@@ -186,7 +210,14 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id) {
   return 0;
 }
 
-int datacenter_list(DataCenter *dc) {
+int datacenter_execute(DataCenter *dc, const char *reservation_id){
+  pthread_mutex_lock(&dc->lock);
+  int ret = datacenter_execute_unlocked(dc, reservation_id);
+  pthread_mutex_unlock(&dc->lock);
+  return ret;
+}
+
+static int datacenter_list_unlocked(DataCenter *dc) {
   if (!dc->configured) {
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
@@ -284,12 +315,19 @@ int datacenter_list(DataCenter *dc) {
   return 0;
 }
 
+int datacenter_list(DataCenter *dc){
+  pthread_mutex_lock(&dc->lock);
+  int ret = datacenter_list_unlocked(dc);
+  pthread_mutex_unlock(&dc->lock);
+  return ret;
+}
+
 void datacenter_wait(unsigned int delay_ms){
   struct timespec delay = (struct timespec){delay_ms / 1000, (delay_ms % 1000) * 1000000};
   nanosleep(&delay, NULL);
 }
 
-int datacenter_finished(DataCenter *dc) {
+static int datacenter_finished_unlocked(DataCenter *dc) {
   int failed = 0;
   size_t i = 0;
 
@@ -347,4 +385,11 @@ int datacenter_finished(DataCenter *dc) {
   }
 
   return failed;
+}
+
+int datacenter_finished(DataCenter *dc){
+  pthread_mutex_lock(&dc->lock);
+  int ret = datacenter_finished_unlocked(dc);
+  pthread_mutex_unlock(&dc->lock);
+  return ret;
 }

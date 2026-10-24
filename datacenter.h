@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <sys/types.h>
+#include <pthread.h>
 
 #include "resources.h"
 #include "constants.h"
@@ -78,14 +79,18 @@ typedef struct DataCenter {
 	int configured;		      // Wheter the datacenter is configured or not.
 
     double total_cpu; 
+    pthread_mutex_t lock; // Protects all mutable state of Data Center
 } DataCenter;
 
 /**
  * Initializes a Data Center.
  *
  * @param dc DataCenter being initialized.
+ *
+ * @return 0 on success.
+ * @return 1 on error (e.g. failed to initialize the lock)
  */
-void datacenter_init(DataCenter *dc);
+int datacenter_init(DataCenter *dc);
 
 /**
  * Destroys a Data Center.
@@ -155,6 +160,14 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id);
  */
 void datacenter_wait(unsigned int delay_ms);
 
+/**
+ * Collects finished VMs and removes completed reservations.
+ *
+ * @param dc Pointer to a Data Center.
+ *
+ * @return 0 on success.
+ * @return 1 on error.
+ */
 int datacenter_finished(DataCenter *dc);
 
 #endif // DATACENTER__H

@@ -169,7 +169,9 @@ static void *worker(void *arg){
 
 int main(int argc, char **argv){
 	DataCenter dc;
-	datacenter_init(&dc);
+	if (datacenter_init(&dc) != 0){
+		return 1;
+	}
 
 	if (argc != 8) {
     fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <selected_cpus> <dir> <max_threads>\n", argv[0]);
