@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <math.h>
 
 VMType *VMType_exists(DataCenter *dc, const char* type_id){
 	for(size_t i = 0; i < dc->num_vm_types; i++){
@@ -238,40 +239,71 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	dc->num_reservations--;
 }
 
-void spawn_vm_child(VM *vm) {
-
-    pid_t pid;
-
+void spawn_vm_child(VM *vm, double total_dc_cpu) {
+	pid_t pid;
 	switch (pid = fork()) {
 		case -1:
 			perror("fork");
 			vm->state = VM_STATE_TERMINATED;
 			return;
+		// Child process
 		case 0: 
-			// Child process
-			if (chdir(vm->type->input_folder) != 0) {
+
+			struct rlimit lim;
+			lim.rlim_cur = 512UL << 20; /* limite de 512MB de RAM alterável pelo processo */
+			lim.rlim_max = 512UL << 20; /* limite de 512 MB de RAM não alterável */
+			setrlimit(RLIMIT_AS, &lim);
+			lim.rlim_cur = 100UL << 10; /* limite de 100KB de tamanho máximo por ficheiro */
+			/* alterável pelo processo */
+			lim.rlim_max = 100UL << 10; /* limite de 100KB de tamanho máximo por ficheiro */
+			/* não alterável pelo processo */
+			setrlimit(RLIMIT_FSIZE, &lim);
+
+			char exec_abs[MAX_PATH_SIZE];
+			if (absolute_path(vm->type->exec_path, exec_abs, sizeof(exec_abs)) != 0) {
+				fprintf(stderr, "Failed to resolve executable path: %s\n", vm->type->exec_path);
+				_exit(1);
+			}
+			
+			char input_dir[MAX_PATH_SIZE];
+            snprintf(input_dir, sizeof(input_dir), "/tmp/CloudIST/%s/input", vm->id);
+			
+			if (chdir(input_dir) != 0) {
             	perror("chdir");
             	_exit(1);
         	}
+
+			// calcular percentagem da VM
+        	double percent = (vm->type->required.cpu / total_dc_cpu) * 100.0;
+        	int cpulimit_percent = (int)ceil(percent);
+			char percent_str[32];
+        	snprintf(percent_str, sizeof(percent_str), "%d", cpulimit_percent);
+
 			char *argv[] = {
-				vm->type->exec_path,
-				NULL
-			};
+            "cpulimit",
+            "-q",
+            "-f",
+            "-l",
+            percent_str,
+            "--",
+            exec_abs,
+            NULL
+        	};
 
-			execv(vm->type->exec_path, argv);
-			perror("execv");
+			execvp("cpulimit", argv);
+			perror("execvp");
 			_exit(127);
-		}
-
-    // Parent process
-    vm->pid = pid;
-    vm->state = VM_STATE_RUNNING;
+		// Parent process
+		default:
+    		vm->pid = pid;
+    		vm->state = VM_STATE_RUNNING;
+	}
 }
 
-int spawn_all_vms(Reservation *res) {
+int spawn_all_vms(DataCenter *dc, Reservation *res) {
 	for (size_t i = 0; i < res->num_vms; i++) {
 		VM *vm = res->vms[i];
-		spawn_vm_child(vm);
+		spawn_vm_child(vm, dc->total_cpu);
 		if (vm->state != VM_STATE_RUNNING) {
             fprintf(stderr, "Failed to start VM %s\n", vm->id);
             return 1;
@@ -302,6 +334,7 @@ void wait_for_all_vms(Reservation *res) {
             vm->state = VM_STATE_TERMINATED;
         }
 	}
+	res->state = RES_STATE_FINISHED;
 }
 
 const char *vm_state_to_string(VMState state) {

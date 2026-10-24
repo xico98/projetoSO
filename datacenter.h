@@ -76,6 +76,8 @@ typedef struct DataCenter {
     size_t num_reservations;
 
 	int configured;		      // Wheter the datacenter is configured or not.
+
+    double total_cpu; 
 } DataCenter;
 
 /**
@@ -152,5 +154,7 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id);
  * @param delay_ms Delay in ms.
  */
 void datacenter_wait(unsigned int delay_ms);
+
+int datacenter_finished(DataCenter *dc);
 
 #endif // DATACENTER__H

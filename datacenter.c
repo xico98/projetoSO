@@ -7,6 +7,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 void datacenter_init(DataCenter *dc) {
   dc->servers = NULL;
@@ -17,9 +18,18 @@ void datacenter_init(DataCenter *dc) {
   dc->num_reservations = 0;
 
   dc->configured = 0;
+
+  dc->total_cpu = 0.0;
 }
 
 void datacenter_destroy(DataCenter *dc) {
+  for (size_t i = 0; i < dc->num_reservations; i++) {
+    Reservation *res = &dc->reservations[i];
+    if (res->state == RES_STATE_RUNNING) {
+      wait_for_all_vms(res);
+    }
+  }
+
   for (size_t i = 0; i < dc->num_servers; i++) {
     for(size_t j = 0; j < dc->servers[i].num_hosted_vms; j++){
       free(dc->servers[i].hosted_vms[j]);
@@ -46,11 +56,14 @@ int datacenter_configure(DataCenter *dc, size_t num_servers, Resources *resource
     return 1;
   }
 
+  dc->total_cpu = 0.0;
+
   for (size_t i = 0; i < num_servers; i++) {
     dc->servers[i].id = i+1;
     dc->servers[i].total = *resources;
     dc->servers[i].available = *resources;
     dc->servers[i].num_hosted_vms = 0;
+    dc->total_cpu += resources->cpu;
   }
 
   dc->num_servers = num_servers;
@@ -148,6 +161,11 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id) {
       fprintf(stderr, "Path truncation error for VM %s input directory.\n", vm->id);
       return 1;
     }
+
+    if (mkdir(input_dst, 0755) == -1 && errno != EEXIST) {
+      fprintf(stderr, "Failed to create input directory %s.\n", input_dst);
+      return 1;
+    }
     
     if (copy_directory(vm->type->input_folder, input_dst) != 0) {
       fprintf(stderr, "Failed to copy input directory for VM %s.\n", vm->id);
@@ -155,16 +173,16 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id) {
     }
   }
 
-  if (spawn_all_vms(res) != 0) return 1;
+  if (spawn_all_vms(dc, res) != 0) return 1;
 
   res->state = RES_STATE_RUNNING;
-
+/*
   wait_for_all_vms(res);
 
   res->state = RES_STATE_FINISHED;
 
   reservation_destroy(dc, res);
-
+*/
   return 0;
 }
 
@@ -269,4 +287,64 @@ int datacenter_list(DataCenter *dc) {
 void datacenter_wait(unsigned int delay_ms){
   struct timespec delay = (struct timespec){delay_ms / 1000, (delay_ms % 1000) * 1000000};
   nanosleep(&delay, NULL);
+}
+
+int datacenter_finished(DataCenter *dc) {
+  int failed = 0;
+  size_t i = 0;
+
+  while (i < dc->num_reservations) {
+    Reservation *res = &dc->reservations[i];
+
+    if (res->state != RES_STATE_RUNNING) {
+      i++;
+      continue;
+    }
+
+    for (size_t j = 0; j < res->num_vms; j++) {
+      VM *vm = res->vms[j];
+
+      if (vm->state != VM_STATE_RUNNING) {
+        continue;
+      }
+
+      int status = 0;
+      pid_t result;
+
+      do {
+        result = waitpid(vm->pid, &status, WNOHANG);
+      } while (result == -1 && errno == EINTR);
+
+      if (result == 0) {
+        continue;
+      }
+
+      if (result == -1) {
+        perror("waitpid");
+        failed = 1;
+        continue;
+      }
+
+      if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        vm->state = VM_STATE_TERMINATED;
+      }
+    }
+
+    int all_terminated = 1;
+    for (size_t j = 0; j < res->num_vms; j++) {
+      if (res->vms[j]->state != VM_STATE_TERMINATED) {
+        all_terminated = 0;
+        break;
+      }
+    }
+
+    if (all_terminated) {
+      reservation_destroy(dc, res);
+      // The next reservation has shifted into index i.
+    } else {
+      i++;
+    }
+  }
+
+  return failed;
 }

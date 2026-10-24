@@ -26,6 +26,10 @@ static int compare_names(const void *a, const void *b){
 
 static void process_commands(DataCenter *dc, int fd){
 	while(1){
+		if (datacenter_finished(dc) != 0) {
+      		fprintf(stderr, "Failed to reap finished VMs.\n");
+      		return;
+    	}
 		switch (get_next_command(fd)){
 			case CMD_DEFINE: {
 				VMType vmtype;
