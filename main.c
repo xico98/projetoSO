@@ -4,11 +4,21 @@
 #include <dirent.h> // header POSIX
 #include <string.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #include "parser.h"
 #include "datacenter.h"
 #include "constants.h"
 #include "filesystem.h"
+
+typedef struct{
+	DataCenter *dc;
+	const char *input_dir;
+	char (*conf_files)[MAX_PATH_SIZE];
+	size_t num_conf_files;
+	size_t next;
+	pthread_mutex_t next_lock;
+} WorkerArgs;
 
 static int compare_names(const void *a, const void *b){
 	return strcmp((const char *)a, (const char *)b);
@@ -118,12 +128,47 @@ static void process_commands(DataCenter *dc, int fd){
 
 }
 
+static void *worker(void *arg){
+	WorkerArgs *w = (WorkerArgs *)arg;
+	
+	while(1){
+		pthread_mutex_lock(&w->next_lock);
+		size_t i = w->next;
+		w->next++;
+		pthread_mutex_unlock(&w->next_lock);
+
+		if (i >= w->num_conf_files){
+			break;
+		}
+
+		char path[MAX_PATH_SIZE];
+		int n = snprintf(path, sizeof(path), "%s/%s", w->input_dir, w->conf_files[i]);
+
+		if (n < 0 || (size_t)n >= sizeof(path)){
+			fprintf(stderr, "Path too long: %s\n", w->conf_files[i]);
+			continue;
+		}
+		printf("%s\n", path); // teste temporario
+
+		int fd = open(path, O_RDONLY);
+		if (fd == -1){
+			fprintf(stderr, "Failed to open %s\n", path);
+			continue;
+		}
+		process_commands(w->dc, fd);
+		close(fd);
+	}
+
+	return NULL;
+
+}
+
 int main(int argc, char **argv){
 	DataCenter dc;
 	datacenter_init(&dc);
 
-	if (argc != 7 && argc != 8) {
-    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <selected_cpus> <dir>\n", argv[0]);
+	if (argc != 8) {
+    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <selected_cpus> <dir> <max_threads>\n", argv[0]);
     return 1;
   }
 
@@ -132,14 +177,21 @@ int main(int argc, char **argv){
 	size_t disk;
 	double cpu;
 	size_t selected_cpus;
+	size_t max_threads;
 	const char *input_dir = argv[6];
 
 	if (parse_size_t_arg(argv[1], &servers) != 0 ||
 			parse_size_t_arg(argv[2], &ram) != 0 ||
 			parse_size_t_arg(argv[3], &disk) != 0 ||
 			parse_double_arg(argv[4], &cpu) != 0 ||
-			parse_size_t_arg(argv[5], &selected_cpus) != 0){
+			parse_size_t_arg(argv[5], &selected_cpus) != 0 ||
+			parse_size_t_arg(argv[7], &max_threads) != 0){
 		fprintf(stderr, "Invalid command line arguments.\n");
+		return 1;
+	}
+
+	if (max_threads == 0){
+		fprintf(stderr, "MAX_THREADS must be greater than 0.\n");
 		return 1;
 	}
 
@@ -199,24 +251,44 @@ int main(int argc, char **argv){
 
 	qsort(conf_files, num_conf_files, MAX_PATH_SIZE, compare_names);
 
-	for (size_t i = 0; i < num_conf_files; i++){
-		char path[MAX_PATH_SIZE];
-		int n = snprintf(path, sizeof(path), "%s/%s", input_dir, conf_files[i]);
-		
-		if (n < 0 || (size_t)n >= sizeof(path)){
-			fprintf(stderr, "Path too long: %s\n", conf_files[i]);
-			continue;
-		}
-		printf("%s\n", path); // teste temporário
-
-		int fd = open(path, O_RDONLY);
-		if (fd == -1){
-			fprintf(stderr, "Failed to open %s\n", path);
-			continue;
-		}
-		process_commands(&dc, fd);
-		close(fd);
+	WorkerArgs w = {
+		.dc = &dc,
+		.input_dir = input_dir,
+		.conf_files = conf_files,
+		.num_conf_files = num_conf_files,
+		.next = 0
+	};
+	
+	if (pthread_mutex_init(&w.next_lock, NULL) != 0){
+		fprintf(stderr, "Failed to initialize mutex.\n");
+		datacenter_destroy(&dc);
+		return 1;
 	}
+
+	size_t num_threads = max_threads < num_conf_files ? max_threads : num_conf_files;
+	pthread_t tids[MAX_CONF_FILES];
+	size_t created = 0;
+
+	for (size_t k = 0; k < num_threads; k++){
+		if (pthread_create(&tids[k], NULL, worker, &w) != 0){
+			fprintf(stderr, "Failed to create thread.\n");
+			break;
+		}
+		created++;
+	}
+
+	if (created == 0 && num_threads > 0){
+		fprintf(stderr, "No worker threads could be created.\n");
+		pthread_mutex_destroy(&w.next_lock);
+		datacenter_destroy(&dc);
+		return 1;
+	}
+
+	for (size_t k = 0; k < created; k++){
+		pthread_join(tids[k], NULL);
+	}
+
+	pthread_mutex_destroy(&w.next_lock);
 	datacenter_destroy(&dc);
 	return 0;
 
