@@ -72,13 +72,15 @@ Reservation *find_pending_reservation(DataCenter *dc, const char *reservation_id
 void reservation_destroy(DataCenter *dc, Reservation *reservation);
 
 /**
- * Runs in the child process after fork(): sets resource limits (RAM,
- * disk) and execs the VM's workload under cpulimit. Never returns
- * (either execs successfully or calls exit(1) on failure).
+ * Prepares the exec arguments and resource limits, then forks. The child
+ * sets the limits (RAM, disk), enters the VM directory and execs the VM's
+ * workload under cpulimit. On success the VM is marked RUNNING.
  *
  * @param vm Pointer to the VM being spawned.
+ * @param total_dc_cpu Total CPUs in the Data Center (CPUs per server * servers).
+ * @param selected_cpus Local CPU cores selected for CloudIST.
  */
-void spawn_vm_child(VM *vm, double total_dc_cpu);
+void spawn_vm_child(VM *vm, double total_dc_cpu, size_t selected_cpus);
 
 /**
  * Forks one child per VM in the reservation, calling spawn_vm_child()

@@ -30,6 +30,7 @@ typedef struct VM {
   Server *server; // Server where the VM is placed.
   pid_t pid;      // PID of executable file.
   VMState state;  // State of the VM.
+  char dir[MAX_PATH_SIZE]; // Working directory of the VM
 } VM;
 
 typedef struct Server {
@@ -78,7 +79,8 @@ typedef struct DataCenter {
 
 	int configured;		      // Wheter the datacenter is configured or not.
 
-    double total_cpu; 
+    double total_cpu;
+    size_t selected_cpus; // Local CPU cores selected for CloudIST
     pthread_mutex_t lock; // Protects all mutable state of Data Center
 } DataCenter;
 

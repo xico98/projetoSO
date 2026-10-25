@@ -21,6 +21,8 @@ int datacenter_init(DataCenter *dc) {
 
   dc->total_cpu = 0.0;
 
+  dc->selected_cpus = 0;
+
   if (pthread_mutex_init(&dc->lock, NULL) != 0){
     fprintf(stderr, "Failed to initialize Data Center lock.\n");
     return 1;
@@ -160,38 +162,38 @@ static int datacenter_execute_unlocked(DataCenter *dc, const char *reservation_i
   Reservation *res = find_pending_reservation(dc, reservation_id);
   if (!res) return 1;
 
-  if (mkdir("/tmp/CloudIST", 0755) == -1 && errno != EEXIST){
-  fprintf(stderr, "Failed to create /tmp/CloudIST.\n");
-  return 1;
+  // Create base directory
+  if (mkdir(CLOUDIST_BASE_DIR, 0755) == -1 && errno != EEXIST) {
+    fprintf(stderr, "Failed to create %s.\n", CLOUDIST_BASE_DIR);
+    return 1;
   }
-  
+
+  // Create reservation directory
+  char res_dir[MAX_PATH_SIZE];
+  int n = snprintf(res_dir, sizeof(res_dir), "%s/%s", CLOUDIST_BASE_DIR, res->id);
+  if (n < 0 || (size_t)n >= sizeof(res_dir)) {
+    fprintf(stderr, "Path too long for reservation %s.\n", res->id);
+    return 1;
+  }
+  if (mkdir(res_dir, 0755) == -1 && errno != EEXIST) {
+    fprintf(stderr, "Failed to create %s.\n", res_dir);
+    return 1;
+  }
+
+  // Create and populate each VM directory
   for (size_t i = 0; i < res->num_vms; i++) {
     VM *vm = res->vms[i];
-    
-    // Create VM working directory
-    char vm_dir[MAX_PATH_SIZE];
-    snprintf(vm_dir, sizeof(vm_dir), "/tmp/CloudIST/%s", vm->id);
-    
-    if (mkdir(vm_dir, 0755) == -1 && errno != EEXIST) {
-      fprintf(stderr, "Failed to create VM directory %s.\n", vm_dir);
-      return 1;
-    }
-    
-    // Copy the VM type's input folder to the VM's working directory
-    char input_dst[MAX_PATH_SIZE];
-    int n = snprintf(input_dst, sizeof(input_dst), "%s/input", vm_dir);
 
-    if (n < 0 || (size_t)n >= sizeof(input_dst)) {
-      fprintf(stderr, "Path truncation error for VM %s input directory.\n", vm->id);
+    n = snprintf(vm->dir, sizeof(vm->dir), "%s/%s", res_dir, vm->id);
+    if (n < 0 || (size_t)n >= sizeof(vm->dir)) {
+      fprintf(stderr, "Path too long for VM %s.\n", vm->id);
       return 1;
     }
-
-    if (mkdir(input_dst, 0755) == -1 && errno != EEXIST) {
-      fprintf(stderr, "Failed to create input directory %s.\n", input_dst);
+    if (mkdir(vm->dir, 0755) == -1 && errno != EEXIST) {
+      fprintf(stderr, "Failed to create %s.\n", vm->dir);
       return 1;
     }
-    
-    if (copy_directory(vm->type->input_folder, input_dst) != 0) {
+    if (copy_directory(vm->type->input_folder, vm->dir) != 0) {
       fprintf(stderr, "Failed to copy input directory for VM %s.\n", vm->id);
       return 1;
     }

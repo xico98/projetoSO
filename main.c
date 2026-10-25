@@ -69,7 +69,7 @@ static void process_commands(DataCenter *dc, int fd){
 				break;
 			}
 
-			case CMD_EXECUTE:
+			case CMD_EXECUTE: {
 				char id[MAX_STRING_SIZE];
 
 				if(parse_execute(fd, id) != 0){
@@ -85,6 +85,7 @@ static void process_commands(DataCenter *dc, int fd){
 				printf("Finished reservation execution!\n");
 
 				break;
+			}
 
 			case CMD_LIST:
 				if (datacenter_list(dc) != 0) {
@@ -94,7 +95,7 @@ static void process_commands(DataCenter *dc, int fd){
 
 				break;
 
-			case CMD_WAIT:
+			case CMD_WAIT: {
 				unsigned int delay;
 
 				if(parse_wait(fd, &delay) != 0){
@@ -104,6 +105,7 @@ static void process_commands(DataCenter *dc, int fd){
 
 				datacenter_wait(delay);
 				break;
+			}
 
 			case CMD_INVALID:
 				fprintf(stderr, "Invalid Command. See H (help) for usage.\n");
@@ -152,7 +154,6 @@ static void *worker(void *arg){
 			fprintf(stderr, "Path too long: %s\n", w->conf_files[i]);
 			continue;
 		}
-		printf("%s\n", path); // teste temporario
 
 		int fd = open(path, O_RDONLY);
 		if (fd == -1){
@@ -217,6 +218,8 @@ int main(int argc, char **argv){
 		fprintf(stderr, "Failed to configure Data Center.\n");
 		return 1;
 	}
+
+	dc.selected_cpus = selected_cpus;
 
 	// Abre a dir de input para listar os ficheiros .conf
 	DIR *dir = opendir(input_dir);

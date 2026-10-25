@@ -239,71 +239,85 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	dc->num_reservations--;
 }
 
-void spawn_vm_child(VM *vm, double total_dc_cpu) {
-	pid_t pid;
-	switch (pid = fork()) {
-		case -1:
-			perror("fork");
-			vm->state = VM_STATE_TERMINATED;
-			return;
-		// Child process
-		case 0: 
+/**
+ * Writes an error message and terminates the child process.
+ * Uses only async-signal-safe calls (write, _exit), so it is safe
+ * after fork() in a multithreaded program.
+ */
+static void child_fail(const char *msg, int code) {
+	ssize_t ignored = write(STDERR_FILENO, msg, strlen(msg));
+	(void)ignored;
+	_exit(code);
+}
 
-			struct rlimit lim;
-			lim.rlim_cur = 512UL << 20; /* limite de 512MB de RAM alterável pelo processo */
-			lim.rlim_max = 512UL << 20; /* limite de 512 MB de RAM não alterável */
-			setrlimit(RLIMIT_AS, &lim);
-			lim.rlim_cur = 100UL << 10; /* limite de 100KB de tamanho máximo por ficheiro */
-			/* alterável pelo processo */
-			lim.rlim_max = 100UL << 10; /* limite de 100KB de tamanho máximo por ficheiro */
-			/* não alterável pelo processo */
-			setrlimit(RLIMIT_FSIZE, &lim);
-
-			char exec_abs[MAX_PATH_SIZE];
-			if (absolute_path(vm->type->exec_path, exec_abs, sizeof(exec_abs)) != 0) {
-				fprintf(stderr, "Failed to resolve executable path: %s\n", vm->type->exec_path);
-				_exit(1);
-			}
-			
-			char input_dir[MAX_PATH_SIZE];
-            snprintf(input_dir, sizeof(input_dir), "/tmp/CloudIST/%s/input", vm->id);
-			
-			if (chdir(input_dir) != 0) {
-            	perror("chdir");
-            	_exit(1);
-        	}
-
-			// calcular percentagem da VM
-        	double percent = (vm->type->required.cpu / total_dc_cpu) * 100.0;
-        	int cpulimit_percent = (int)ceil(percent);
-			char percent_str[32];
-        	snprintf(percent_str, sizeof(percent_str), "%d", cpulimit_percent);
-
-			char *argv[] = {
-            "cpulimit",
-            "-q",
-            "-f",
-            "-l",
-            percent_str,
-            "--",
-            exec_abs,
-            NULL
-        	};
-
-			execvp("cpulimit", argv);
-			perror("execvp");
-			_exit(127);
-		// Parent process
-		default:
-    		vm->pid = pid;
-    		vm->state = VM_STATE_RUNNING;
+void spawn_vm_child(VM *vm, double total_dc_cpu, size_t selected_cpus) {
+	// Prepare everything in the parent: after fork() the child of a
+	// multithreaded process may only call async-signal-safe functions.
+	char exec_abs[MAX_PATH_SIZE];
+	if (absolute_path(vm->type->exec_path, exec_abs, sizeof(exec_abs)) != 0) {
+		fprintf(stderr, "Failed to resolve executable path: %s\n", vm->type->exec_path);
+		return;
 	}
+
+	// CPU limit = 100 * vCPU * selected_cpus / total_dc_cpu
+	double percent = 100.0 * vm->type->required.cpu * (double)selected_cpus / total_dc_cpu;
+	int cpulimit_percent = (int)ceil(percent);
+	char percent_str[32];
+	snprintf(percent_str, sizeof(percent_str), "%d", cpulimit_percent);
+
+	char *argv[] = {
+		"cpulimit",
+		"-q",
+		"-f",
+		"-l",
+		percent_str,
+		"--",
+		exec_abs,
+		NULL
+	};
+
+	struct rlimit ram_lim;
+	// Limit RAM (address space) to the VM's RAM, converted from GB to bytes
+	ram_lim.rlim_cur = (rlim_t)vm->type->required.ram << 30;
+	ram_lim.rlim_max = (rlim_t)vm->type->required.ram << 30;
+
+	struct rlimit disk_lim;
+	// Limit max file size to the VM's disk, converted from GB to bytes
+	disk_lim.rlim_cur = (rlim_t)vm->type->required.disk << 30;
+	disk_lim.rlim_max = (rlim_t)vm->type->required.disk << 30;
+
+	pid_t pid = fork();
+
+	if (pid == -1) {
+		perror("fork");
+		vm->state = VM_STATE_TERMINATED;
+		return;
+	}
+
+	// Child process
+	if (pid == 0) {
+		if (setrlimit(RLIMIT_AS, &ram_lim) != 0)
+			child_fail("setrlimit RLIMIT_AS failed\n", 1);
+
+		if (setrlimit(RLIMIT_FSIZE, &disk_lim) != 0)
+			child_fail("setrlimit RLIMIT_FSIZE failed\n", 1);
+
+		if (chdir(vm->dir) != 0)
+			child_fail("chdir to VM directory failed\n", 1);
+
+		execvp("cpulimit", argv);
+		child_fail("execvp cpulimit failed\n", 127);
+	}
+
+	// Parent process
+	vm->pid = pid;
+	vm->state = VM_STATE_RUNNING;
 }
 
 int spawn_all_vms(DataCenter *dc, Reservation *res) {
 	for (size_t i = 0; i < res->num_vms; i++) {
 		VM *vm = res->vms[i];
-		spawn_vm_child(vm, dc->total_cpu);
+		spawn_vm_child(vm, dc->total_cpu, dc->selected_cpus);
 		if (vm->state != VM_STATE_RUNNING) {
             fprintf(stderr, "Failed to start VM %s\n", vm->id);
             return 1;
